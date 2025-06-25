@@ -13,6 +13,7 @@ GameObject:
   - component: {fileID: 8096497278831801410}
   - component: {fileID: 6860793107087193327}
   - component: {fileID: 1000618434722484592}
+  - component: {fileID: 8222997955185037830}
   m_Layer: 0
   m_Name: BaseMC
   m_TagString: Untagged
@@ -145,3 +146,28 @@ CapsuleCollider2D:
   m_Offset: {x: 0, y: 0}
   m_Size: {x: 0.26, y: 0.46}
   m_Direction: 0
+--- !u!114 &8222997955185037830
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4842742380282177629}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bb0c222b094b3be42bb16bacd0c1bb0b, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  moveSpeed: 5
+  rollSpeed: 8
+  rollDuration: 0.5
+  attackCooldown: 1
+  comboCooldown: 1.5
+  specialAttackCooldown: 3
+  currentForm: 0
+  formAnimators:
+  - {fileID: 9100000, guid: 9f5296a35a3a82c42994daa93ca32af3, type: 2}
+  - {fileID: 9100000, guid: fe0781f7eac3bc0468c87ddaa5b0e874, type: 2}
+  - {fileID: 9100000, guid: b0e9b39f154a0fd4881986b9154dcabb, type: 2}
+  - {fileID: 9100000, guid: 525ccd39ce02a8344b4ed3584c9c7759, type: 2}
+  - {fileID: 9100000, guid: 76125a6695d85e746b08fe7197ad1060, type: 2}
