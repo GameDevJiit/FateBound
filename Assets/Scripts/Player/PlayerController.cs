@@ -22,11 +22,25 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private float moveSpeed = 5f;
     [SerializeField] private float rollSpeed = 8f;
     [SerializeField] private float rollDuration = 0.5f;
+    [SerializeField] private float jumpForce = 7f;
+    [SerializeField] private float crouchSpeedModifier = 0.5f;
     
     [Header("Combat Settings")]
-    [SerializeField] private float attackCooldown = 0.5f;
-    [SerializeField] private float comboCooldown = 1.5f;
     [SerializeField] private float specialAttackCooldown = 3f;
+    [SerializeField] private float maxChargeTime = 2f;
+    
+    [Header("Jump Settings")]
+    [SerializeField] private float jumpHeight = 3f;
+    [SerializeField] private float jumpDuration = 0.5f;
+    [SerializeField] private float gravity = -20f;
+    
+    [Header("Animation Timing")]
+    [SerializeField] private float attack1Duration = 0.4f;
+    [SerializeField] private float attack2Duration = 0.5f;
+    [SerializeField] private float attack3Duration = 0.6f;
+    [SerializeField] private float specialAttackDuration = 1.2f;
+    [SerializeField] private float rollAnimationDuration = 0.5f;
+    [SerializeField] private float hurtAnimationDuration = 0.5f;
     
     [Header("Form System")]
     [SerializeField] private FormType currentForm = FormType.Base;
@@ -34,14 +48,19 @@ public class PlayerController : MonoBehaviour
     
     // Movement variables
     private float horizontalInput;
+    private float verticalInput;
     private bool facingRight = true;
     private bool isMoving = false;
+    private bool isGrounded = true;
+    private bool isCrouching = false;
+    private float verticalVelocity = 0f;
+    private bool isJumpingUp = false;
     
-    // Combat variables
-    private int attackPhase = 0;
-    private bool canAttack = true;
+    // Combat variables - Charge System
+    private bool isCharging = false;
+    private float chargeStartTime;
+    private float chargeDuration;
     private bool isAttacking = false;
-    private float lastAttackTime;
     private float lastSpecialAttackTime;
     
     // State variables
@@ -49,12 +68,13 @@ public class PlayerController : MonoBehaviour
     private bool isDefending = false;
     private bool isHurt = false;
     private bool canTransform = true;
+    private bool isJumping = false;
     
     // Input buffer for smoother controls
-    private bool attackInputBuffer = false;
     private bool rollInputBuffer = false;
     private bool defendInputBuffer = false;
     private bool specialInputBuffer = false;
+    private bool jumpInputBuffer = false;
     
     // Coroutine references to prevent multiple instances
     private Coroutine attackResetCoroutine;
@@ -82,7 +102,7 @@ public class PlayerController : MonoBehaviour
     {
         HandleInput();
         HandleMovement();
-        HandleAttack();
+        HandleChargeAttack();
         HandleFormAbilities();
         HandleFormTransformation();
         UpdateAnimatorParameters();
@@ -91,34 +111,68 @@ public class PlayerController : MonoBehaviour
     
     void HandleInput()
     {
-        // Movement input
+        // Movement input - WASD
         horizontalInput = Input.GetAxisRaw("Horizontal");
+        verticalInput = Input.GetAxisRaw("Vertical");
         
+        // Crouch input - Ctrl
+        isCrouching = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
+        
+        // Jump input - Space with buffering
+        if (Input.GetKeyDown(KeyCode.Space))
+            jumpInputBuffer = true;
+            
         // Combat input with buffering for smoother feel
-        if (Input.GetKeyDown(KeyCode.Z) || Input.GetKeyDown(KeyCode.J))
-            attackInputBuffer = true;
+        if (Input.GetKeyDown(KeyCode.X)) // Special Attack
+            specialInputBuffer = true;
             
-        if (Input.GetKeyDown(KeyCode.X) || Input.GetKeyDown(KeyCode.K))
-            rollInputBuffer = true;
-            
-        if (Input.GetKey(KeyCode.C) || Input.GetKey(KeyCode.L))
+        if (Input.GetKey(KeyCode.LeftShift)) // Defend/Block
             defendInputBuffer = true;
         else
             defendInputBuffer = false;
             
-        if (Input.GetKeyDown(KeyCode.V) || Input.GetKeyDown(KeyCode.I))
-            specialInputBuffer = true;
+        if (Input.GetKeyDown(KeyCode.Q)) // Roll/Dodge
+            rollInputBuffer = true;
     }
     
     void HandleMovement()
     {
         // Don't move if performing certain actions
-        if (isAttacking || isRolling || isDefending)
+        if (isAttacking || isRolling || isHurt)
             return;
             
-        // Apply movement
-        Vector2 movement = new Vector2(horizontalInput * moveSpeed, rb.velocity.y);
-        rb.velocity = movement;
+        // Handle jumping
+        if (jumpInputBuffer && isGrounded && !isCrouching)
+        {
+            PerformJump();
+            jumpInputBuffer = false;
+        }
+        
+        // Apply custom gravity when not grounded
+        if (!isGrounded)
+        {
+            verticalVelocity += gravity * Time.deltaTime;
+            transform.position += Vector3.up * verticalVelocity * Time.deltaTime;
+            
+            // Check if we should stop jumping animation
+            if (isJumpingUp && verticalVelocity <= 0)
+            {
+                isJumpingUp = false;
+                isJumping = false;
+            }
+        }
+        else
+        {
+            // Reset vertical velocity when grounded
+            verticalVelocity = 0f;
+            isJumpingUp = false;
+            isJumping = false;
+        }
+            
+        // Apply horizontal movement
+        float currentSpeed = isCrouching ? moveSpeed * crouchSpeedModifier : moveSpeed;
+        Vector2 horizontalMovement = new Vector2(horizontalInput * currentSpeed, 0);
+        transform.position += (Vector3)horizontalMovement * Time.deltaTime;
         
         // Update movement state
         isMoving = Mathf.Abs(horizontalInput) > 0.1f;
@@ -130,19 +184,96 @@ public class PlayerController : MonoBehaviour
             Flip();
     }
     
-    void HandleAttack()
+    void PerformJump()
     {
-        // Reset combo if too much time passed
-        if (Time.time - lastAttackTime > comboCooldown)
+        // Calculate jump velocity based on desired height
+        float jumpVelocity = Mathf.Sqrt(2 * jumpHeight * Mathf.Abs(gravity));
+        verticalVelocity = jumpVelocity;
+        
+        isGrounded = false;
+        isJumping = true;
+        isJumpingUp = true;
+        animator.SetTrigger("Jump");
+    }
+    
+    void HandleChargeAttack()
+    {
+        // Start charging attack
+        if (Input.GetKeyDown(KeyCode.E) && !isCharging && !isAttacking && !isRolling && !isDefending && !isJumping)
         {
-            attackPhase = 0;
+            StartCharging();
         }
         
-        // Process attack input
-        if (attackInputBuffer && canAttack && !isRolling && !isDefending)
+        // Release attack
+        if (Input.GetKeyUp(KeyCode.E) && isCharging)
         {
-            PerformAttack();
-            attackInputBuffer = false;
+            ReleaseAttack();
+        }
+        
+        // Update charge duration
+        if (isCharging)
+        {
+            chargeDuration = Time.time - chargeStartTime;
+            // Clamp to max charge time
+            chargeDuration = Mathf.Min(chargeDuration, maxChargeTime);
+        }
+    }
+    
+    void StartCharging()
+    {
+        isCharging = true;
+        chargeStartTime = Time.time;
+        chargeDuration = 0f;
+        
+        // Optional: Add charging animation or effects
+        animator.SetBool("isCharging", true);
+    }
+    
+    void ReleaseAttack()
+    {
+        if (!isCharging) return;
+        
+        isCharging = false;
+        isAttacking = true;
+        
+        animator.SetBool("isCharging", false);
+        
+        // Determine attack type based on charge duration
+        int attackType = GetAttackType(chargeDuration);
+        
+        // Stop any existing attack reset coroutine
+        if (attackResetCoroutine != null)
+            StopCoroutine(attackResetCoroutine);
+        
+        // Set the appropriate attack trigger
+        animator.SetTrigger("Attack" + attackType);
+        
+        // Reset attack state after appropriate duration
+        float attackDuration = GetAttackDuration(attackType);
+        
+        attackResetCoroutine = StartCoroutine(ResetAttackState(attackDuration));
+        
+        Debug.Log($"Attack {attackType} - Charge Duration: {chargeDuration:F2}s");
+    }
+    
+    int GetAttackType(float duration)
+    {
+        if (duration < 0.5f)
+            return 1; // Quick attack
+        else if (duration < 1f)
+            return 2; // Medium attack
+        else
+            return 3; // Heavy attack
+    }
+    
+    float GetAttackDuration(int attackType)
+    {
+        switch (attackType)
+        {
+            case 1: return attack1Duration;
+            case 2: return attack2Duration;
+            case 3: return attack3Duration;
+            default: return attack1Duration;
         }
     }
     
@@ -152,15 +283,15 @@ public class PlayerController : MonoBehaviour
         if (currentForm == FormType.Base)
             return;
             
-        // Roll ability
-        if (rollInputBuffer && !isRolling && !isAttacking && !isDefending)
+        // Roll ability (Q key)
+        if (rollInputBuffer && !isRolling && !isAttacking && !isDefending && !isCharging)
         {
             StartCoroutine(PerformRoll());
             rollInputBuffer = false;
         }
         
-        // Defend ability
-        if (defendInputBuffer && !isRolling && !isAttacking)
+        // Defend ability (Left Shift)
+        if (defendInputBuffer && !isRolling && !isAttacking && !isCharging)
         {
             isDefending = true;
         }
@@ -169,9 +300,9 @@ public class PlayerController : MonoBehaviour
             isDefending = false;
         }
         
-        // Special attack
+        // Special attack (X key)
         if (specialInputBuffer && Time.time - lastSpecialAttackTime > specialAttackCooldown && 
-            !isRolling && !isDefending)
+            !isRolling && !isDefending && !isJumping && !isCharging)
         {
             PerformSpecialAttack();
             specialInputBuffer = false;
@@ -180,7 +311,7 @@ public class PlayerController : MonoBehaviour
     
     void HandleFormTransformation()
     {
-        if (!canTransform)
+        if (!canTransform || isCharging)
             return;
             
         // Form transformation inputs (1-5 keys)
@@ -196,48 +327,29 @@ public class PlayerController : MonoBehaviour
             ChangeForm(FormType.Echo4);
     }
     
-    void PerformAttack()
-    {
-        isAttacking = true;
-        canAttack = false;
-        
-        // Advance combo phase
-        attackPhase = (attackPhase % 3) + 1; // Cycles through 1, 2, 3
-        
-        lastAttackTime = Time.time;
-        
-        // Stop movement during attack
-        rb.velocity = new Vector2(0, rb.velocity.y);
-        
-        // Stop any existing attack reset coroutine
-        if (attackResetCoroutine != null)
-            StopCoroutine(attackResetCoroutine);
-        
-        // Reset attack state after animation
-        attackResetCoroutine = StartCoroutine(ResetAttackState());
-    }
-    
     IEnumerator PerformRoll()
     {
         isRolling = true;
+        animator.SetTrigger("Roll");
         
-        // Apply roll velocity
+        // Apply roll movement using transform
         Vector2 rollDirection = facingRight ? Vector2.right : Vector2.left;
-        rb.velocity = new Vector2(rollDirection.x * rollSpeed, rb.velocity.y);
+        float rollTime = 0f;
         
-        yield return new WaitForSeconds(rollDuration);
+        while (rollTime < rollDuration)
+        {
+            transform.position += (Vector3)(rollDirection * rollSpeed * Time.deltaTime);
+            rollTime += Time.deltaTime;
+            yield return null;
+        }
         
         isRolling = false;
-        rb.velocity = new Vector2(0, rb.velocity.y);
     }
     
     void PerformSpecialAttack()
     {
         lastSpecialAttackTime = Time.time;
         isAttacking = true;
-        
-        // Stop movement during special attack
-        rb.velocity = new Vector2(0, rb.velocity.y);
         
         // Trigger special attack animation
         animator.SetTrigger("SpecialAttack");
@@ -247,20 +359,19 @@ public class PlayerController : MonoBehaviour
             StopCoroutine(specialAttackResetCoroutine);
         
         // Reset after animation
-        specialAttackResetCoroutine = StartCoroutine(ResetSpecialAttackState());
+        specialAttackResetCoroutine = StartCoroutine(ResetSpecialAttackState(specialAttackDuration));
     }
     
-    IEnumerator ResetAttackState()
+    IEnumerator ResetAttackState(float duration)
     {
-        yield return new WaitForSeconds(attackCooldown);
+        yield return new WaitForSeconds(duration);
         isAttacking = false;
-        canAttack = true;
         attackResetCoroutine = null;
     }
     
-    IEnumerator ResetSpecialAttackState()
+    IEnumerator ResetSpecialAttackState(float duration)
     {
-        yield return new WaitForSeconds(1f); // Adjust based on animation length
+        yield return new WaitForSeconds(duration);
         isAttacking = false;
         specialAttackResetCoroutine = null;
     }
@@ -319,26 +430,22 @@ public class PlayerController : MonoBehaviour
         isRolling = false;
         isDefending = false;
         isHurt = false;
-        attackPhase = 0;
-        canAttack = true;
+        isJumping = false;
+        isJumpingUp = false;
+        isCharging = false;
+        chargeDuration = 0f;
+        verticalVelocity = 0f;
         
         // Clear input buffers
-        attackInputBuffer = false;
         rollInputBuffer = false;
         specialInputBuffer = false;
         defendInputBuffer = false;
-        
-        // Stop movement
-        rb.velocity = new Vector2(0, rb.velocity.y);
+        jumpInputBuffer = false;
     }
     
     void ProcessInputBuffers()
     {
         // Clear input buffers after a short time to prevent accidental inputs
-        if (attackInputBuffer)
-        {
-            StartCoroutine(ClearInputBuffer("attack", 0.1f));
-        }
         if (rollInputBuffer)
         {
             StartCoroutine(ClearInputBuffer("roll", 0.1f));
@@ -346,6 +453,10 @@ public class PlayerController : MonoBehaviour
         if (specialInputBuffer)
         {
             StartCoroutine(ClearInputBuffer("special", 0.1f));
+        }
+        if (jumpInputBuffer)
+        {
+            StartCoroutine(ClearInputBuffer("jump", 0.1f));
         }
     }
     
@@ -355,14 +466,14 @@ public class PlayerController : MonoBehaviour
         
         switch (inputType)
         {
-            case "attack":
-                attackInputBuffer = false;
-                break;
             case "roll":
                 rollInputBuffer = false;
                 break;
             case "special":
                 specialInputBuffer = false;
+                break;
+            case "jump":
+                jumpInputBuffer = false;
                 break;
         }
     }
@@ -374,10 +485,14 @@ public class PlayerController : MonoBehaviour
         // Movement parameters
         animator.SetBool("isRunning", isMoving);
         animator.SetFloat("Speed", Mathf.Abs(horizontalInput));
+        animator.SetBool("isGrounded", isGrounded);
+        animator.SetBool("isCrouching", isCrouching);
+        animator.SetBool("isJumping", isJumping);
     
         // Combat parameters
-        animator.SetInteger("attackPhase", attackPhase);
         animator.SetBool("isAttacking", isAttacking);
+        animator.SetBool("isCharging", isCharging);
+        animator.SetFloat("chargeDuration", chargeDuration);
     
         // State parameters
         animator.SetBool("isRolling", isRolling);
@@ -386,13 +501,29 @@ public class PlayerController : MonoBehaviour
     
         // Form parameter
         animator.SetInteger("currentForm", (int)currentForm);
-        
     }
     
     void Flip()
     {
         facingRight = !facingRight;
         spriteRenderer.flipX = !facingRight;
+    }
+    
+    void OnCollisionEnter2D(Collision2D collision)
+    {
+        if (collision.gameObject.CompareTag("Ground"))
+        {
+            isGrounded = true;
+            isJumping = false;
+        }
+    }
+    
+    void OnCollisionExit2D(Collision2D collision)
+    {
+        if (collision.gameObject.CompareTag("Ground"))
+        {
+            isGrounded = false;
+        }
     }
     
     // Public methods for external damage/effect systems
@@ -402,16 +533,23 @@ public class PlayerController : MonoBehaviour
         
         isHurt = true;
         
+        // Cancel charging if taking damage
+        if (isCharging)
+        {
+            isCharging = false;
+            animator.SetBool("isCharging", false);
+        }
+        
         // Stop any existing hurt reset coroutine
         if (hurtResetCoroutine != null)
             StopCoroutine(hurtResetCoroutine);
         
-        hurtResetCoroutine = StartCoroutine(ResetHurtState());
+        hurtResetCoroutine = StartCoroutine(ResetHurtState(hurtAnimationDuration));
     }
     
-    IEnumerator ResetHurtState()
+    IEnumerator ResetHurtState(float duration)
     {
-        yield return new WaitForSeconds(0.5f);
+        yield return new WaitForSeconds(duration);
         isHurt = false;
         hurtResetCoroutine = null;
     }
@@ -421,12 +559,14 @@ public class PlayerController : MonoBehaviour
     public bool IsDefending() => isDefending;
     public bool IsRolling() => isRolling;
     public bool IsAttacking() => isAttacking;
+    public bool IsCrouching() => isCrouching;
+    public bool IsCharging() => isCharging;
+    public float GetChargeDuration() => chargeDuration;
     
     // Animation Events (called from animation clips)
     public void OnAttackComplete()
     {
         isAttacking = false;
-        canAttack = true;
         
         // Stop the reset coroutine since animation event handles it
         if (attackResetCoroutine != null)
